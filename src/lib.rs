@@ -110,7 +110,7 @@ impl Cycle {
     pub fn detect(&mut self, now: u64, remaining: u64, reaction: u64, recast: u64) -> bool {
         if self.pending.is_none() && now >= self.blocked_until && remaining > 30 {
             let reel = now + reaction.min(remaining - 30);
-            self.pending = Some((reel, recast.min(1000), false));
+            self.pending = Some((reel, recast, false));
             return true;
         }
         false
@@ -141,14 +141,15 @@ mod tests {
     #[test]
     fn timing_and_duplicate_suppression() {
         let mut c = Cycle::default();
-        c.detect(0, 500, 100, 1000);
+        c.detect(0, 500, 100, 2000);
         c.detect(50, 500, 0, 0);
         assert_eq!(c.tick(99), None);
         assert_eq!(c.tick(100), Some(Action::Reel));
-        assert_eq!(c.tick(1124), None);
-        assert_eq!(c.tick(1125), Some(Action::Cast));
-        c.detect(1200, 500, 0, 0);
-        assert_eq!(c.tick(1200), None);
+        assert_eq!(c.tick(1125), None); // Do not clamp a longer delay to one second.
+        assert_eq!(c.tick(2124), None);
+        assert_eq!(c.tick(2125), Some(Action::Cast));
+        c.detect(2200, 500, 0, 0);
+        assert_eq!(c.tick(2200), None);
     }
     #[test]
     fn pause_cancels_recast_and_late_actions() {

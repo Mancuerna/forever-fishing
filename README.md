@@ -1,6 +1,6 @@
 # Forever Fishing
 
-Asistente de pesca de consola para Windows x64, escrito en Rust. Escucha el dispositivo de salida predeterminado mediante WASAPI loopback (no el micrófono), reconoce el inicio de una muestra de picada y pulsa Espacio para recoger. Tras soltar la tecla espera entre 0 y 1000 ms y vuelve a pulsarla para lanzar.
+Asistente de pesca de consola para Windows x64, escrito en Rust. Escucha el dispositivo de salida predeterminado mediante WASAPI loopback (no el micrófono), reconoce el inicio de una muestra de picada y pulsa Espacio para recoger. Tras soltar la tecla espera entre 1000 y 2000 ms y vuelve a pulsarla para lanzar.
 
 ## Preparación
 
@@ -31,6 +31,7 @@ Vuelve al juego y pulsa **F8** para activar. Escucha y compara las detecciones d
 .\forever-fishing.exe run
 ```
 
+- `--recast-min-ms 1000 --recast-max-ms 2000` configura la espera aleatoria entre recoger y lanzar (milisegundos; mínimo ≤ máximo; límites 0–30000).
 - `--diagnostics` muestra la similitud máxima por segundo y las detecciones aceptadas. Consulta el [inventario y análisis de sonidos](docs/sound-research.md).
 - **F8** activa/pausa; **Escape** termina. Empieza pausado.
 - Al perder el foco del juego se pausa y cancela acciones pendientes. Pulsa F8 en el juego para reanudar.

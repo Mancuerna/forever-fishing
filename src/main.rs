@@ -35,6 +35,12 @@ enum Command {
         /// Print best similarity each second and accepted detection details.
         #[arg(long)]
         diagnostics: bool,
+        /// Minimum delay after reeling before casting again, in milliseconds.
+        #[arg(long, default_value_t = 1000, value_parser = clap::value_parser!(u64).range(0..=30000))]
+        recast_min_ms: u64,
+        /// Maximum delay after reeling before casting again, in milliseconds.
+        #[arg(long, default_value_t = 2000, value_parser = clap::value_parser!(u64).range(0..=30000))]
+        recast_max_ms: u64,
     },
 }
 fn down(key: u16) -> bool {
@@ -80,60 +86,77 @@ fn space() -> Result<()> {
 }
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let (mut detectors, threshold, window, dry_run, diagnostics, recording) = match cli.command {
-        Command::Record { path, seconds } => {
-            ensure!((1..=30).contains(&seconds), "seconds must be 1..30");
-            (
-                Vec::new(),
-                0.9,
-                String::new(),
-                true,
-                false,
-                Some((path, seconds)),
-            )
-        }
-        Command::Run {
-            references,
-            threshold,
-            window,
-            dry_run,
-            diagnostics,
-        } => {
-            ensure!(
-                threshold.is_finite() && (0.5..=1.0).contains(&threshold),
-                "threshold must be 0.5..1"
-            );
-            ensure!(!window.trim().is_empty(), "Window title must not be empty");
-            let audio = if references.is_empty() {
-                forever_fishing::audio::BUILTIN
-                    .iter()
-                    .map(|(name, bytes)| {
-                        Ok((name.to_string(), forever_fishing::audio::decode(bytes)?))
+    let (mut detectors, threshold, window, dry_run, diagnostics, recast_range, recording) =
+        match cli.command {
+            Command::Record { path, seconds } => {
+                ensure!((1..=30).contains(&seconds), "seconds must be 1..30");
+                (
+                    Vec::new(),
+                    0.9,
+                    String::new(),
+                    true,
+                    false,
+                    1000..=2000,
+                    Some((path, seconds)),
+                )
+            }
+            Command::Run {
+                references,
+                threshold,
+                window,
+                dry_run,
+                diagnostics,
+                recast_min_ms,
+                recast_max_ms,
+            } => {
+                ensure!(
+                    threshold.is_finite() && (0.5..=1.0).contains(&threshold),
+                    "threshold must be 0.5..1"
+                );
+                ensure!(!window.trim().is_empty(), "Window title must not be empty");
+                ensure!(
+                    recast_min_ms <= recast_max_ms,
+                    "recast-min-ms must not exceed recast-max-ms"
+                );
+                let audio = if references.is_empty() {
+                    forever_fishing::audio::BUILTIN
+                        .iter()
+                        .map(|(name, bytes)| {
+                            Ok((name.to_string(), forever_fishing::audio::decode(bytes)?))
+                        })
+                        .collect::<Result<Vec<_>>>()?
+                } else {
+                    references
+                        .iter()
+                        .map(|path| {
+                            Ok((
+                                path.display().to_string(),
+                                forever_fishing::audio::decode(&std::fs::read(path)?)?,
+                            ))
+                        })
+                        .collect::<Result<Vec<_>>>()?
+                };
+                let detectors = audio
+                    .into_iter()
+                    .map(|(name, samples)| {
+                        let d = Detector::new(&samples)?;
+                        println!("Reference: {name}, {} ms", d.duration_ms);
+                        Ok((name, d))
                     })
-                    .collect::<Result<Vec<_>>>()?
-            } else {
-                references
-                    .iter()
-                    .map(|path| {
-                        Ok((
-                            path.display().to_string(),
-                            forever_fishing::audio::decode(&std::fs::read(path)?)?,
-                        ))
-                    })
-                    .collect::<Result<Vec<_>>>()?
-            };
-            let detectors = audio
-                .into_iter()
-                .map(|(name, samples)| {
-                    let d = Detector::new(&samples)?;
-                    println!("Reference: {name}, {} ms", d.duration_ms);
-                    Ok((name, d))
-                })
-                .collect::<Result<Vec<_>>>()?;
-            println!("F8: start/pause. Esc: exit. Dry run: {dry_run}");
-            (detectors, threshold, window, dry_run, diagnostics, None)
-        }
-    };
+                    .collect::<Result<Vec<_>>>()?;
+                println!("F8: start/pause. Esc: exit. Dry run: {dry_run}");
+                println!("Recast delay: {recast_min_ms}..={recast_max_ms} ms");
+                (
+                    detectors,
+                    threshold,
+                    window,
+                    dry_run,
+                    diagnostics,
+                    recast_min_ms..=recast_max_ms,
+                    None,
+                )
+            }
+        };
     initialize_mta().ok()?;
     let enumerator = DeviceEnumerator::new()?;
     let device = enumerator.get_default_device(Direction::Render)?;
@@ -239,10 +262,11 @@ fn main() -> Result<()> {
             if let Some((score, duration, name)) = best_match {
                 let remaining = duration.saturating_sub(140 + 100); // prefix/alignment + latency
                 let reaction = rand::random_range(0..=remaining.saturating_sub(30));
-                if cycle.detect(now, remaining, reaction, rand::random_range(0..=1000))
-                    && diagnostics
-                {
-                    println!("Detected {name}: score={score:.4}, reel in {reaction} ms");
+                let recast = rand::random_range(recast_range.clone());
+                if cycle.detect(now, remaining, reaction, recast) && diagnostics {
+                    println!(
+                        "Detected {name}: score={score:.4}, reel in {reaction} ms, recast delay {recast} ms"
+                    );
                 }
             }
         }
