@@ -32,6 +32,9 @@ enum Command {
         window: String,
         #[arg(long)]
         dry_run: bool,
+        /// Print best similarity each second and accepted detection details.
+        #[arg(long)]
+        diagnostics: bool,
     },
 }
 fn down(key: u16) -> bool {
@@ -77,16 +80,24 @@ fn space() -> Result<()> {
 }
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let (mut detectors, threshold, window, dry_run, recording) = match cli.command {
+    let (mut detectors, threshold, window, dry_run, diagnostics, recording) = match cli.command {
         Command::Record { path, seconds } => {
             ensure!((1..=30).contains(&seconds), "seconds must be 1..30");
-            (Vec::new(), 0.9, String::new(), true, Some((path, seconds)))
+            (
+                Vec::new(),
+                0.9,
+                String::new(),
+                true,
+                false,
+                Some((path, seconds)),
+            )
         }
         Command::Run {
             references,
             threshold,
             window,
             dry_run,
+            diagnostics,
         } => {
             ensure!(
                 threshold.is_finite() && (0.5..=1.0).contains(&threshold),
@@ -116,11 +127,11 @@ fn main() -> Result<()> {
                 .map(|(name, samples)| {
                     let d = Detector::new(&samples)?;
                     println!("Reference: {name}, {} ms", d.duration_ms);
-                    Ok(d)
+                    Ok((name, d))
                 })
                 .collect::<Result<Vec<_>>>()?;
             println!("F8: start/pause. Esc: exit. Dry run: {dry_run}");
-            (detectors, threshold, window, dry_run, None)
+            (detectors, threshold, window, dry_run, diagnostics, None)
         }
     };
     initialize_mta().ok()?;
@@ -161,6 +172,9 @@ fn main() -> Result<()> {
     let mut active = false;
     let mut previous_f8 = false;
     let mut cycle = Cycle::default();
+    let mut last_report = 0;
+    let mut peak_score = 0.0_f32;
+    let mut peak_name = String::new();
     loop {
         let now = start.elapsed().as_millis() as u64;
         if down(VK_ESCAPE) {
@@ -192,7 +206,7 @@ fn main() -> Result<()> {
         if writer.is_none() && bytes.len() > FRAME * 4 * 5 {
             bytes.clear();
             cycle.cancel(now);
-            for d in &mut detectors {
+            for (_, d) in &mut detectors {
                 d.reset();
             }
         }
@@ -208,21 +222,39 @@ fn main() -> Result<()> {
                 }
             }
             let mut best_match = None;
-            for d in &mut detectors {
+            for (name, d) in &mut detectors {
                 if !allowed {
                     d.reset();
                     continue;
                 }
                 let score = d.score(&frame);
-                if score >= threshold && best_match.is_none_or(|(best, _)| score > best) {
-                    best_match = Some((score, d.duration_ms));
+                if diagnostics && score > peak_score {
+                    peak_score = score;
+                    peak_name.clone_from(name);
+                }
+                if score >= threshold && best_match.is_none_or(|(best, _, _)| score > best) {
+                    best_match = Some((score, d.duration_ms, name.as_str()));
                 }
             }
-            if let Some((_, duration)) = best_match {
+            if let Some((score, duration, name)) = best_match {
                 let remaining = duration.saturating_sub(140 + 100); // prefix/alignment + latency
                 let reaction = rand::random_range(0..=remaining.saturating_sub(30));
-                cycle.detect(now, remaining, reaction, rand::random_range(0..=1000));
+                if cycle.detect(now, remaining, reaction, rand::random_range(0..=1000))
+                    && diagnostics
+                {
+                    println!("Detected {name}: score={score:.4}, reel in {reaction} ms");
+                }
             }
+        }
+        if diagnostics && now >= last_report + 1000 {
+            if allowed {
+                println!(
+                    "Best score={peak_score:.4}, threshold={threshold:.4}, reference={peak_name}"
+                );
+            }
+            last_report = now;
+            peak_score = 0.0;
+            peak_name.clear();
         }
         if allowed
             && foreground_matches(&window)

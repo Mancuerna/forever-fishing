@@ -6,10 +6,11 @@ Asistente de pesca de consola para Windows x64, escrito en Rust. Escucha el disp
 
 Configura **Espacio** en el juego/addon para recoger y volver a lanzar con la misma tecla. El programa no configura esos bindings. Lanza manualmente la primera vez. Activa el saqueo automático si tu configuración lo necesita.
 
-El ejecutable integra las tres variantes OGG de [Fishing Hooked (3355)](https://www.wowhead.com/sound=3355/fishing-hooked) aportadas por el usuario. No necesita descargas ni archivos externos. Cada variante tiene su propia firma y duración; si varias coinciden en un bloque se usa la de mayor similitud.
+El ejecutable integra las tres variantes modernas OGG de [Fishing Hooked (3355)](https://www.wowhead.com/sound=3355/fishing-hooked) aportadas por el usuario y la referencia histórica **FishBite.ogg** de Wowhead Classic. No necesita descargas ni archivos externos. Cada variante tiene su propia firma y duración; si varias coinciden en un bloque se usa la de mayor similitud.
 
 | Variante | Archivo completo | Región activa usada |
 | --- | ---: | ---: |
+| FishBite (Classic) | 2171 ms | 1608 ms |
 | ver2_1 | 3492 ms | 2229 ms |
 | ver2_2 | 3163 ms | 2099 ms |
 | ver2_3 | 3030 ms | 1590 ms |
@@ -30,6 +31,7 @@ Vuelve al juego y pulsa **F8** para activar. Escucha y compara las detecciones d
 .\forever-fishing.exe run
 ```
 
+- `--diagnostics` muestra la similitud máxima por segundo y las detecciones aceptadas. Consulta el [inventario y análisis de sonidos](docs/sound-research.md).
 - **F8** activa/pausa; **Escape** termina. Empieza pausado.
 - Al perder el foco del juego se pausa y cancela acciones pendientes. Pulsa F8 en el juego para reanudar.
 - Por defecto exige que el título de la ventana activa contenga `World of Warcraft`. Puedes cambiarlo con `--window "título del cliente"`.
@@ -42,7 +44,7 @@ Compara seis ventanas espectrales FFT de 20 ms en 20 bandas, con diez alineacion
 
 Descarta audio atrasado y acciones vencidas, e ignora detecciones mientras recoge/relanza y durante dos segundos tras relanzar. Una picada perdida no provoca relanzamientos automáticos: pausa, lanza manualmente y reanuda. La captura mezcla todo el audio del PC: desactiva música/notificaciones para mejorar fiabilidad. La identificación por título de ventana no identifica un proceso de forma inequívoca.
 
-Las pruebas reproducen las tres muestras con veinte desfases temporales y volumen al 20 %, y comprueban rechazo de silencio, otro tono y ruido blanco. La peor similitud observada es 0.9961; la detección ocurre antes de 180 ms desde el inicio de la región activa. **Pendiente de prueba dentro de WoW Forever**, con su mezcla de audio real.
+Las pruebas reproducen las cuatro muestras con veinte desfases temporales y volumen al 20 %, y comprueban rechazo de silencio, otro tono y ruido blanco. La peor similitud observada es 0.9961; la detección ocurre antes de 180 ms desde el inicio de la región activa. **Pendiente de prueba dentro de WoW Forever**, con su mezcla de audio real.
 
 ## Referencias personalizadas
 

@@ -58,7 +58,8 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<f32>> {
         .collect())
 }
 
-pub const BUILTIN: [(&str, &[u8]); 3] = [
+pub const BUILTIN: [(&str, &[u8]); 4] = [
+    ("FishBite", include_bytes!("../assets/FishBite.ogg")),
     (
         "FishingBobber_ver2_1",
         include_bytes!("../assets/FishingBobber_ver2_1.ogg"),

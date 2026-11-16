@@ -107,11 +107,13 @@ impl Cycle {
         self.pending = None;
         self.blocked_until = now + 1500;
     }
-    pub fn detect(&mut self, now: u64, remaining: u64, reaction: u64, recast: u64) {
+    pub fn detect(&mut self, now: u64, remaining: u64, reaction: u64, recast: u64) -> bool {
         if self.pending.is_none() && now >= self.blocked_until && remaining > 30 {
             let reel = now + reaction.min(remaining - 30);
             self.pending = Some((reel, recast.min(1000), false));
+            return true;
         }
+        false
     }
     pub fn tick(&mut self, now: u64) -> Option<Action> {
         let (due, delay, reeled) = self.pending?;
