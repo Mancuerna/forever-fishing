@@ -25,8 +25,8 @@ enum Command {
     },
     /// Listen for a reference splash. Starts paused; F8 toggles, Esc exits.
     Run {
-        reference: PathBuf,
-        #[arg(long, default_value_t = 0.90)]
+        references: Vec<PathBuf>,
+        #[arg(long, default_value_t = 0.96)]
         threshold: f32,
         #[arg(long, default_value = "World of Warcraft")]
         window: String,
@@ -75,49 +75,15 @@ fn space() -> Result<()> {
     }
     Ok(())
 }
-fn load(path: &PathBuf) -> Result<Vec<f32>> {
-    let mut wav = hound::WavReader::open(path)?;
-    let spec = wav.spec();
-    ensure!(
-        spec.channels > 0 && spec.sample_rate > 0,
-        "Invalid WAV format"
-    );
-    ensure!(
-        wav.duration() <= spec.sample_rate * 30,
-        "Reference must be at most 30 seconds"
-    );
-    let samples: Vec<f32> = if spec.sample_format == hound::SampleFormat::Float {
-        wav.samples::<f32>()
-            .collect::<std::result::Result<_, _>>()?
-    } else {
-        let scale = 2_f32.powi(spec.bits_per_sample as i32 - 1);
-        wav.samples::<i32>()
-            .map(|v| v.map(|x| x as f32 / scale))
-            .collect::<std::result::Result<_, _>>()?
-    };
-    let mono: Vec<f32> = samples
-        .chunks_exact(spec.channels as usize)
-        .map(|c| c.iter().sum::<f32>() / c.len() as f32)
-        .collect();
-    let len = mono.len() * RATE as usize / spec.sample_rate as usize;
-    Ok((0..len)
-        .map(|i| {
-            let position = i as f64 * spec.sample_rate as f64 / RATE as f64;
-            let a = position as usize;
-            let b = (a + 1).min(mono.len() - 1);
-            mono[a] + (mono[b] - mono[a]) * position.fract() as f32
-        })
-        .collect())
-}
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let (mut detector, threshold, window, dry_run, recording) = match cli.command {
+    let (mut detectors, threshold, window, dry_run, recording) = match cli.command {
         Command::Record { path, seconds } => {
             ensure!((1..=30).contains(&seconds), "seconds must be 1..30");
-            (None, 0.9, String::new(), true, Some((path, seconds)))
+            (Vec::new(), 0.9, String::new(), true, Some((path, seconds)))
         }
         Command::Run {
-            reference,
+            references,
             threshold,
             window,
             dry_run,
@@ -127,12 +93,34 @@ fn main() -> Result<()> {
                 "threshold must be 0.5..1"
             );
             ensure!(!window.trim().is_empty(), "Window title must not be empty");
-            let d = Detector::new(&load(&reference)?)?;
-            println!(
-                "Reference: {} ms. F8: start/pause. Esc: exit. Dry run: {dry_run}",
-                d.duration_ms
-            );
-            (Some(d), threshold, window, dry_run, None)
+            let audio = if references.is_empty() {
+                forever_fishing::audio::BUILTIN
+                    .iter()
+                    .map(|(name, bytes)| {
+                        Ok((name.to_string(), forever_fishing::audio::decode(bytes)?))
+                    })
+                    .collect::<Result<Vec<_>>>()?
+            } else {
+                references
+                    .iter()
+                    .map(|path| {
+                        Ok((
+                            path.display().to_string(),
+                            forever_fishing::audio::decode(&std::fs::read(path)?)?,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>>>()?
+            };
+            let detectors = audio
+                .into_iter()
+                .map(|(name, samples)| {
+                    let d = Detector::new(&samples)?;
+                    println!("Reference: {name}, {} ms", d.duration_ms);
+                    Ok(d)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            println!("F8: start/pause. Esc: exit. Dry run: {dry_run}");
+            (detectors, threshold, window, dry_run, None)
         }
     };
     initialize_mta().ok()?;
@@ -184,7 +172,7 @@ fn main() -> Result<()> {
             break;
         }
         let f8 = down(VK_F8);
-        if f8 && !previous_f8 && detector.is_some() {
+        if f8 && !previous_f8 && !detectors.is_empty() {
             active = !active;
             cycle.cancel(now);
             println!("{}", if active { "Listening" } else { "Paused" });
@@ -204,7 +192,7 @@ fn main() -> Result<()> {
         if writer.is_none() && bytes.len() > FRAME * 4 * 5 {
             bytes.clear();
             cycle.cancel(now);
-            if let Some(d) = &mut detector {
+            for d in &mut detectors {
                 d.reset();
             }
         }
@@ -219,17 +207,21 @@ fn main() -> Result<()> {
                     w.write_sample(sample)?;
                 }
             }
-            if let Some(d) = &mut detector {
+            let mut best_match = None;
+            for d in &mut detectors {
                 if !allowed {
                     d.reset();
                     continue;
                 }
                 let score = d.score(&frame);
-                if score >= threshold {
-                    let remaining = d.duration_ms.saturating_sub(120 + 100); // prefix + latency margin
-                    let reaction = rand::random_range(0..=remaining.saturating_sub(30));
-                    cycle.detect(now, remaining, reaction, rand::random_range(0..=1000));
+                if score >= threshold && best_match.is_none_or(|(best, _)| score > best) {
+                    best_match = Some((score, d.duration_ms));
                 }
+            }
+            if let Some((_, duration)) = best_match {
+                let remaining = duration.saturating_sub(140 + 100); // prefix/alignment + latency
+                let reaction = rand::random_range(0..=remaining.saturating_sub(30));
+                cycle.detect(now, remaining, reaction, rand::random_range(0..=1000));
             }
         }
         if allowed

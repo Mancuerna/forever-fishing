@@ -1,3 +1,4 @@
+pub mod audio;
 use std::collections::VecDeque;
 
 pub const RATE: u32 = 16000;
@@ -7,26 +8,28 @@ const PREFIX: usize = 6; // Recognize the first 120 ms, not the whole splash.
 type Feature = [f32; BANDS];
 
 fn feature(samples: &[f32]) -> Feature {
-    let mut out = [0.0; BANDS];
-    for (band, value) in out.iter_mut().enumerate() {
-        let frequency = 180.0 * 1.19_f32.powi(band as i32);
-        let coefficient = 2.0 * (std::f32::consts::TAU * frequency / RATE as f32).cos();
-        let (mut a, mut b) = (0.0, 0.0);
-        for (i, sample) in samples.iter().enumerate() {
-            let window = 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / FRAME as f32).cos();
-            let next = sample * window + coefficient * a - b;
-            b = a;
-            a = next;
-        }
-        *value = (a * a + b * b - coefficient * a * b).max(0.0).sqrt();
+    use rustfft::{FftPlanner, num_complex::Complex};
+    use std::sync::{Arc, OnceLock};
+    static FFT: OnceLock<Arc<dyn rustfft::Fft<f32>>> = OnceLock::new();
+    let fft = FFT.get_or_init(|| FftPlanner::new().plan_fft_forward(512));
+    let mut bins = [Complex::new(0.0, 0.0); 512];
+    for (i, sample) in samples.iter().enumerate() {
+        let window = 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / FRAME as f32).cos();
+        bins[i].re = sample * window;
     }
+    fft.process(&mut bins);
+    let mut out = [0.0; BANDS];
+    for (i, bin) in bins.iter().enumerate().take(241).skip(4) {
+        let band = (((i as f32 / 4.0).ln() / (241.0_f32 / 4.0).ln()) * BANDS as f32) as usize;
+        out[band.min(BANDS - 1)] += bin.norm_sqr();
+    }
+    out.iter_mut().for_each(|v| *v = v.sqrt());
     let norm = out.iter().map(|v| v * v).sum::<f32>().sqrt().max(1e-12);
     out.iter_mut().for_each(|v| *v /= norm);
     out
 }
-
 pub struct Detector {
-    reference: Vec<Feature>,
+    reference: Vec<Vec<Feature>>,
     history: VecDeque<Feature>,
     pub duration_ms: u64,
 }
@@ -47,12 +50,17 @@ impl Detector {
             "Use an isolated splash lasting 250 ms to 10 s"
         );
         Ok(Self {
-            reference: sound
-                .as_chunks::<FRAME>()
-                .0
-                .iter()
-                .take(PREFIX)
-                .map(|frame| feature(frame))
+            reference: (0..FRAME)
+                .step_by(32)
+                .map(|offset| {
+                    sound[offset..]
+                        .as_chunks::<FRAME>()
+                        .0
+                        .iter()
+                        .take(PREFIX)
+                        .map(|frame| feature(frame))
+                        .collect()
+                })
                 .collect(),
             history: VecDeque::new(),
             duration_ms,
@@ -72,10 +80,15 @@ impl Detector {
         }
         self.reference
             .iter()
-            .zip(&self.history)
-            .map(|(a, b)| a.iter().zip(b).map(|(x, y)| x * y).sum::<f32>())
-            .sum::<f32>()
-            / PREFIX as f32
+            .map(|reference| {
+                reference
+                    .iter()
+                    .zip(&self.history)
+                    .map(|(a, b)| a.iter().zip(b).map(|(x, y)| x * y).sum::<f32>())
+                    .sum::<f32>()
+                    / PREFIX as f32
+            })
+            .fold(0.0_f32, f32::max)
     }
 }
 

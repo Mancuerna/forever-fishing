@@ -6,41 +6,54 @@ Asistente de pesca de consola para Windows x64, escrito en Rust. Escucha el disp
 
 Configura **Espacio** en el juego/addon para recoger y volver a lanzar con la misma tecla. El programa no configura esos bindings. Lanza manualmente la primera vez. Activa el saqueo automático si tu configuración lo necesita.
 
-Necesitas una muestra WAV aislada del sonido que realmente utiliza tu cliente. No se distribuye una muestra de Blizzard ni se presupone que un sonido encontrado en internet corresponda a Forever. Puedes grabar cinco segundos del audio del PC:
+El ejecutable integra las tres variantes OGG de [Fishing Hooked (3355)](https://www.wowhead.com/sound=3355/fishing-hooked) aportadas por el usuario. No necesita descargas ni archivos externos. Cada variante tiene su propia firma y duración; si varias coinciden en un bloque se usa la de mayor similitud.
 
-```powershell
-.\forever-fishing.exe record captura.wav --seconds 5
-```
+| Variante | Archivo completo | Región activa usada |
+| --- | ---: | ---: |
+| ver2_1 | 3492 ms | 2229 ms |
+| ver2_2 | 3163 ms | 2099 ms |
+| ver2_3 | 3030 ms | 1590 ms |
 
-Inicia la grabación justo antes de una picada y recorta **solo una picada completa** en un editor de audio; guarda como `picada.wav` (WAV PCM o float, mono o estéreo). Evita música, voces, otros efectos y el sonido del lanzamiento. El programa elimina silencio inicial/final por amplitud; no separa automáticamente sonidos mezclados. Admite muestras de hasta 30 segundos, con una región audible de 250 ms a 10 s. Convierte internamente a mono/16 kHz.
+La región activa excluye el silencio y la cola por debajo del 8 % del pico. No conviene usar toda la duración del archivo como ventana de pulsación. Créditos de los sonidos en `THIRD_PARTY.md`.
 
 ## Uso
 
 Prueba primero sin enviar teclas:
 
 ```powershell
-.\forever-fishing.exe run picada.wav --dry-run
+.\forever-fishing.exe run --dry-run
 ```
 
 Vuelve al juego y pulsa **F8** para activar. Escucha y compara las detecciones de consola con las picadas reales. Después:
 
 ```powershell
-.\forever-fishing.exe run picada.wav
+.\forever-fishing.exe run
 ```
 
 - **F8** activa/pausa; **Escape** termina. Empieza pausado.
 - Al perder el foco del juego se pausa y cancela acciones pendientes. Pulsa F8 en el juego para reanudar.
 - Por defecto exige que el título de la ventana activa contenga `World of Warcraft`. Puedes cambiarlo con `--window "título del cliente"`.
-- `--threshold 0.90` ajusta la similitud mínima (0.5–1). Subirlo reduce sensibilidad; bajarlo aumenta falsos positivos.
+- `--threshold 0.96` ajusta la similitud mínima (0.5–1). Subirlo reduce sensibilidad; bajarlo aumenta falsos positivos.
 - Usa el mismo dispositivo de audio de salida para WoW y Windows. Reinicia el asistente si cambias de dispositivo.
 
 ## Detección y tiempos
 
-Compara seis ventanas espectrales de 20 ms del inicio de la muestra con el audio entrante, normalizadas para tolerar cambios de volumen. No espera a escuchar el sonido completo: tras los primeros 120 ms elige un retardo aleatorio dentro de la duración restante estimada, con margen para latencia. No puede seleccionar instantes anteriores a la detección ni garantizar que una muestra diferente dure lo mismo. Las pulsaciones duran 20 ms; el intervalo posterior incluye unos pocos milisegundos de procesamiento. La aleatoriedad no garantiza detección perfecta ni cambios en cómo el juego interpreta las teclas.
+Compara seis ventanas espectrales FFT de 20 ms en 20 bandas, con diez alineaciones posibles del inicio de la muestra con el audio entrante, normalizadas para tolerar cambios de volumen. No espera a escuchar el sonido completo: tras los primeros 120 ms elige un retardo aleatorio dentro de la duración restante estimada, con margen para latencia. No puede seleccionar instantes anteriores a la detección ni garantizar que una muestra diferente dure lo mismo. Las pulsaciones duran 20 ms; el intervalo posterior incluye unos pocos milisegundos de procesamiento. La aleatoriedad no garantiza detección perfecta ni cambios en cómo el juego interpreta las teclas.
 
 Descarta audio atrasado y acciones vencidas, e ignora detecciones mientras recoge/relanza y durante dos segundos tras relanzar. Una picada perdida no provoca relanzamientos automáticos: pausa, lanza manualmente y reanuda. La captura mezcla todo el audio del PC: desactiva música/notificaciones para mejorar fiabilidad. La identificación por título de ventana no identifica un proceso de forma inequívoca.
 
-La detección se valida con señales sintéticas; **pendiente de calibración y prueba real con WoW Forever**. No se ha validado una muestra de internet como equivalente al cliente.
+Las pruebas reproducen las tres muestras con veinte desfases temporales y volumen al 20 %, y comprueban rechazo de silencio, otro tono y ruido blanco. La peor similitud observada es 0.9961; la detección ocurre antes de 180 ms desde el inicio de la región activa. **Pendiente de prueba dentro de WoW Forever**, con su mezcla de audio real.
+
+## Referencias personalizadas
+
+Puedes sustituir las muestras integradas por uno o varios archivos WAV u OGG Vorbis:
+
+```powershell
+.\forever-fishing.exe run picada1.ogg picada2.ogg picada3.wav --dry-run
+.\forever-fishing.exe record captura.wav --seconds 5
+```
+
+Para crear una referencia, recorta una sola picada completa de la grabación, sin lanzamiento, música ni otros efectos. Se admiten archivos de hasta 30 segundos con región activa de 250 ms a 10 s. La conversión a mono/16 kHz es interna; no necesita FFmpeg.
 
 ## Desarrollo y releases
 

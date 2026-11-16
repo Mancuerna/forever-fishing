@@ -71,7 +71,7 @@ jobs:
           ./target/release/forever-fishing.exe --version
           if ($LASTEXITCODE -ne 0) { throw 'Executable smoke test failed' }
           New-Item -ItemType Directory -Force dist/package | Out-Null
-          Copy-Item target/release/forever-fishing.exe,README.md,LICENSE dist/package/
+          Copy-Item target/release/forever-fishing.exe,README.md,LICENSE,THIRD_PARTY.md dist/package/
           $zip = "dist/forever-fishing-$version-windows-x64.zip"
           Compress-Archive dist/package/* $zip
           $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()

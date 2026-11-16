@@ -13,3 +13,5 @@ hound = "3.5"
 rand = "0.9"
 wasapi = "0.27"
 windows-sys = { version = "0.61", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
+lewton = "0.10"
+rustfft = "6.4"
