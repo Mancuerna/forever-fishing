@@ -1,23 +1,31 @@
+mod process;
 use anyhow::{Context, Result, ensure};
 use clap::{Parser, Subcommand};
 use forever_fishing::{Cycle, Detector, FRAME, RATE};
+use process::foreground_matches;
 use std::{
     collections::VecDeque,
     path::PathBuf,
     time::{Duration, Instant},
 };
 use wasapi::*;
-use windows_sys::Win32::UI::{Input::KeyboardAndMouse::*, WindowsAndMessaging::*};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
 
 #[derive(Parser)]
 #[command(version, about)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
+    /// Capture only this process and its children; otherwise find the WoW window.
+    #[arg(long, global = true, conflicts_with = "system_audio", value_parser = clap::value_parser!(u32).range(1..))]
+    process_id: Option<u32>,
+    /// Explicitly capture the default output device instead of only WoW.
+    #[arg(long, global = true)]
+    system_audio: bool,
 }
 #[derive(Subcommand)]
 enum Command {
-    /// Record PC output to a WAV. Isolate/trim one splash before using it.
+    /// Record the selected application audio to a WAV. Isolate/trim one splash before using it.
     Record {
         path: PathBuf,
         #[arg(long, default_value_t = 5)]
@@ -45,17 +53,6 @@ enum Command {
 }
 fn down(key: u16) -> bool {
     unsafe { GetAsyncKeyState(key as i32) < 0 }
-}
-fn foreground_matches(expected: &str) -> bool {
-    let mut title = [0u16; 512];
-    unsafe {
-        let hwnd = GetForegroundWindow();
-        let length = GetWindowTextW(hwnd, title.as_mut_ptr(), title.len() as i32);
-        length > 0
-            && String::from_utf16_lossy(&title[..length as usize])
-                .to_lowercase()
-                .contains(&expected.to_lowercase())
-    }
 }
 fn space() -> Result<()> {
     let input = |flags| INPUT {
@@ -93,7 +90,7 @@ fn main() -> Result<()> {
                 (
                     Vec::new(),
                     0.9,
-                    String::new(),
+                    "World of Warcraft".to_string(),
                     true,
                     false,
                     1000..=2000,
@@ -158,9 +155,26 @@ fn main() -> Result<()> {
             }
         };
     initialize_mta().ok()?;
-    let enumerator = DeviceEnumerator::new()?;
-    let device = enumerator.get_default_device(Direction::Render)?;
-    let mut client = device.get_iaudioclient()?;
+    let process_id = if cli.system_audio {
+        None
+    } else {
+        Some(match cli.process_id {
+            Some(id) => id,
+            None => process::find_process(&window)?,
+        })
+    };
+    let process_guard = process_id.map(process::ProcessGuard::open).transpose()?;
+    let mut client = if let Some(id) = process_id {
+        println!("Audio: process {id} and its children only");
+        // true includes the target tree. false would EXCLUDE it, capturing other apps.
+        AudioClient::new_application_loopback_client(id, true)
+            .context("Per-process audio capture failed (Windows build 20348+ required). No system-audio fallback was used.")?
+    } else {
+        println!("Audio: entire default Windows output device");
+        DeviceEnumerator::new()?
+            .get_default_device(Direction::Render)?
+            .get_iaudioclient()?
+    };
     let format = WaveFormat::new(32, 32, SampleType::Float, RATE as usize, 1, None);
     client
         .initialize_client(
@@ -172,7 +186,7 @@ fn main() -> Result<()> {
             },
             None,
         )
-        .context("Cannot capture default Windows output device")?;
+        .context("Cannot initialize selected audio source")?;
     let event = client.set_get_eventhandle()?;
     let capture = client.get_audiocaptureclient()?;
     let mut bytes = VecDeque::new();
@@ -199,6 +213,10 @@ fn main() -> Result<()> {
     let mut peak_score = 0.0_f32;
     let mut peak_name = String::new();
     loop {
+        if process_guard.as_ref().is_some_and(|guard| !guard.running()) {
+            println!("Selected process exited. Restart the assistant after reopening WoW.");
+            break;
+        }
         let now = start.elapsed().as_millis() as u64;
         if down(VK_ESCAPE) {
             break;
@@ -215,7 +233,7 @@ fn main() -> Result<()> {
             println!("{}", if active { "Listening" } else { "Paused" });
         }
         previous_f8 = f8;
-        let allowed = active && foreground_matches(&window);
+        let allowed = active && foreground_matches(&window, process_id);
         if active && !allowed {
             active = false;
             println!("Paused: game lost focus. F8 to resume.");
@@ -281,7 +299,7 @@ fn main() -> Result<()> {
             peak_name.clear();
         }
         if allowed
-            && foreground_matches(&window)
+            && foreground_matches(&window, process_id)
             && !down(VK_ESCAPE)
             && !down(VK_F8)
             && let Some(action) = cycle.tick(start.elapsed().as_millis() as u64)

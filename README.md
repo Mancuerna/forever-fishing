@@ -1,6 +1,6 @@
 # Forever Fishing
 
-Asistente de pesca de consola para Windows x64, escrito en Rust. Escucha el dispositivo de salida predeterminado mediante WASAPI loopback (no el micrófono), reconoce el inicio de una muestra de picada y pulsa Espacio para recoger. Tras soltar la tecla espera entre 1000 y 2000 ms y vuelve a pulsarla para lanzar.
+Asistente de pesca de consola para Windows x64, escrito en Rust. Escucha únicamente el proceso de WoW y sus procesos hijos mediante WASAPI process loopback (no el micrófono ni la mezcla de todo el PC), reconoce el inicio de una muestra de picada y pulsa Espacio para recoger. Tras soltar la tecla espera entre 1000 y 2000 ms y vuelve a pulsarla para lanzar.
 
 ## Preparación
 
@@ -37,15 +37,32 @@ Vuelve al juego y pulsa **F8** para activar. Escucha y compara las detecciones d
 - Al perder el foco del juego se pausa y cancela acciones pendientes. Pulsa F8 en el juego para reanudar.
 - Por defecto exige que el título de la ventana activa contenga `World of Warcraft`. Puedes cambiarlo con `--window "título del cliente"`.
 - `--threshold 0.96` ajusta la similitud mínima (0.5–1). Subirlo reduce sensibilidad; bajarlo aumenta falsos positivos.
-- Usa el mismo dispositivo de audio de salida para WoW y Windows. Reinicia el asistente si cambias de dispositivo.
+- Abre WoW antes de iniciar el asistente. Se selecciona el proceso por el título de su ventana; si hay varias instancias, usa `--process-id PID`. Si WoW se cierra, el asistente termina y debes reiniciarlo con el juego.
 
 ## Detección y tiempos
 
 Compara seis ventanas espectrales FFT de 20 ms en 20 bandas, con diez alineaciones posibles del inicio de la muestra con el audio entrante, normalizadas para tolerar cambios de volumen. No espera a escuchar el sonido completo: tras los primeros 120 ms elige un retardo aleatorio dentro de la duración restante estimada, con margen para latencia. No puede seleccionar instantes anteriores a la detección ni garantizar que una muestra diferente dure lo mismo. Las pulsaciones duran 20 ms; el intervalo posterior incluye unos pocos milisegundos de procesamiento. La aleatoriedad no garantiza detección perfecta ni cambios en cómo el juego interpreta las teclas.
 
-Descarta audio atrasado y acciones vencidas, e ignora detecciones mientras recoge/relanza y durante dos segundos tras relanzar. Una picada perdida no provoca relanzamientos automáticos: pausa, lanza manualmente y reanuda. La captura mezcla todo el audio del PC: desactiva música/notificaciones para mejorar fiabilidad. La identificación por título de ventana no identifica un proceso de forma inequívoca.
+Descarta audio atrasado y acciones vencidas, e ignora detecciones mientras recoge/relanza y durante dos segundos tras relanzar. Una picada perdida no provoca relanzamientos automáticos: pausa, lanza manualmente y reanuda. La captura predeterminada excluye otras aplicaciones, pero incluye música, ambiente y voces del propio juego. Puedes reducirlos en WoW para mejorar la detección. Las pulsaciones requieren que la ventana activa pertenezca al proceso seleccionado y tenga el título esperado.
 
 Las pruebas reproducen las cuatro muestras con veinte desfases temporales y volumen al 20 %, y comprueban rechazo de silencio, otro tono y ruido blanco. La peor similitud observada es 0.9961; la detección ocurre antes de 180 ms desde el inicio de la región activa. **Pendiente de prueba dentro de WoW Forever**, con su mezcla de audio real.
+
+## Audio exclusivo de WoW y EarTrumpet
+
+No requiere configurar EarTrumpet, cables virtuales ni cambiar el dispositivo de salida. Windows captura los flujos del proceso seleccionado y sus hijos, incluso si usa una salida distinta de la predeterminada. No separa efectos, música y ambiente dentro de WoW.
+
+Requiere Windows build 20348 o posterior (incluido Windows 11). Si falla la selección o activación, se muestra un error; nunca se cambia automáticamente a capturar todo el PC. La captura por dispositivo anterior sigue disponible explícitamente con `--system-audio`. Estas opciones funcionan tanto en `run` como en `record`:
+
+```powershell
+.\forever-fishing.exe run --diagnostics
+.\forever-fishing.exe run --process-id 12345 --diagnostics
+.\forever-fishing.exe record captura.wav --seconds 5 --process-id 12345
+.\forever-fishing.exe run --system-audio
+```
+
+El PID cambia al reiniciar el juego; omite `--process-id` para selección automática por título. No selecciones el launcher ni el proceso de voz. Si hay varias ventanas del mismo proceso se consideran una única instancia. Para grabar un cliente con otro título, indica su PID.
+
+Referencia: [captura loopback por aplicación de Microsoft](https://learn.microsoft.com/en-us/samples/microsoft/windows-classic-samples/applicationloopbackaudio-sample/).
 
 ## Referencias personalizadas
 
