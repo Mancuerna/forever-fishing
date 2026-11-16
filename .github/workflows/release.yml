@@ -1,0 +1,91 @@
+name: Release
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to publish or retry (v0.1.0)
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: releases
+  cancel-in-progress: false
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    outputs:
+      created: ${{ steps.please.outputs.release_created }}
+      tag: ${{ steps.please.outputs.tag_name || inputs.tag }}
+      ref: ${{ steps.please.outputs.sha || inputs.tag }}
+    steps:
+      - uses: googleapis/release-please-action@8b8fd2cc23b2e18957157a9d923d75aa0c6f6ad5 # v4
+        id: please
+        if: github.event_name == 'push'
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          config-file: .github/release-please-config.json
+          manifest-file: .github/release-please-manifest.json
+      - name: Check release pull request
+        if: steps.please.outputs.prs_created == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_BRANCH: ${{ fromJSON(steps.please.outputs.pr || '{}').headBranchName }}
+        run: gh workflow run ci.yml --ref "$RELEASE_BRANCH"
+  publish:
+    needs: prepare
+    if: needs.prepare.outputs.created == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: windows-2022
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.prepare.outputs.ref }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+        with:
+          toolchain: '1.99.1'
+          components: rustfmt, clippy
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
+      - run: cargo build --locked --release
+      - name: Package and verify version
+        shell: pwsh
+        run: |
+          $metadata = cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json
+          $version = $metadata.packages[0].version
+          if ($env:RELEASE_TAG -cne "v$version") { throw 'Tag must match Cargo.toml' }
+          ./target/release/forever-fishing.exe --version
+          if ($LASTEXITCODE -ne 0) { throw 'Executable smoke test failed' }
+          New-Item -ItemType Directory -Force dist/package | Out-Null
+          Copy-Item target/release/forever-fishing.exe,README.md,LICENSE dist/package/
+          $zip = "dist/forever-fishing-$version-windows-x64.zip"
+          Compress-Archive dist/package/* $zip
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  $(Split-Path $zip -Leaf)" | Set-Content "$zip.sha256"
+      - name: Upload and publish after successful checks
+        shell: pwsh
+        run: |
+          gh release view $env:RELEASE_TAG *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $env:RELEASE_TAG --verify-tag --draft --title $env:RELEASE_TAG --generate-notes
+            if ($LASTEXITCODE -ne 0) { throw 'Draft creation failed' }
+          }
+          $files = @(Get-ChildItem dist -File | ForEach-Object FullName)
+          gh release upload $env:RELEASE_TAG @files --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'Upload failed' }
+          gh release edit $env:RELEASE_TAG --draft=false --latest
+          if ($LASTEXITCODE -ne 0) { throw 'Publish failed' }
